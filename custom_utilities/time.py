@@ -1,4 +1,4 @@
-from number import format_float
+from .number import format_float
 
 def parse_duration(duration_in_seconds:float=0) -> str:
     """Return parsed duration.
