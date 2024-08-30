@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='custom_utilities',
-    version='0.1.4',
+    version='0.1.5',
     description='Python package consisting of custom utilities',
     packages=find_packages(),
     classifiers=[
