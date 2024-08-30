@@ -4,7 +4,7 @@ def parse_duration(duration_in_seconds:float=0) -> str:
     """Return parsed duration.
 
     Args:
-        duration_in_seconds: A `Float`. Duration to be parsed in seconds unit.
+        duration_in_seconds (`float`, Optional): Duration to be parsed in seconds unit.
             It is suggested to use value from time or datetime methods. Defults to `0`.
     """
     if duration_in_seconds == 0: return '0ms'
