@@ -132,7 +132,8 @@ def _upload_file_to_bucket(source_file_path:str, storage_bucket:storage.Bucket, 
 
     # * Function Logic
     file_blob = storage_bucket.blob(bucket_file_path)
-    file_blob.upload_from_filename(source_file_path)
+    if not file_blob.exists():
+        file_blob.upload_from_filename(source_file_path)
 
 def upload_file(
     source_file_paths:Union[list[str],str]=None,
