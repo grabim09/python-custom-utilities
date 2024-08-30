@@ -103,7 +103,7 @@ def _traverse_folder(
             if upload_to_single_folder:
                 bucket_file_path:str = bucket_folder_path + '/' + entry.name
             else:
-                re.sub(r'^.*?/', bucket_folder_path + '/', entry.path.replace('\\', '/'))
+                bucket_file_path:str = re.sub(r'^.*?/', bucket_folder_path + '/', entry.path.replace('\\', '/'))
             print(f"Current directory: '{os.path.dirname(entry.path)}', Uploading file: '{entry.name}', Uploaded file count: {index}/{entries_count} ({f"{(index / entries_count) * 100:.2f}"}%)")
             print(f"Uploading file to: '{bucket_file_path}'")
             print(f"Elapsed time: {parse_duration(elapsed_time)}, Average time: {parse_duration(average_time)}, Remaining time: {parse_duration(remaining_time)}")
