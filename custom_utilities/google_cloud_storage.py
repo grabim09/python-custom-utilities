@@ -47,6 +47,38 @@ def _traverse_local_folder(
             upload_tasks.extend(_traverse_local_folder(entry.path, bucket_name, bucket_folder_path, upload_to_single_folder))
     return upload_tasks
 
+def _traverse_bucket_folder(
+    bucket_name:str,
+    bucket_folder_path:str,
+    destination_folder_path:str,
+    download_to_single_folder:bool
+) -> list:
+    """Private function to traverse a folder inside a given GCS folder and create download tasks.
+
+    Args:
+        bucket_name (`str`, Mandatory): The name of the GCS Bucket where the folder is stored.
+        bucket_folder_paths (`str`, Mandatory): The path of the folder in the GCS Bucket.
+        destination_folder_path (`str`, Mandatory): The local folder path where files should be saved.
+        download_to_single_folder (`bool`, Optional): If True, all files will be downloaded to a single local folder.
+
+    Returns:
+        `list`: List of download tasks as tuples (bucket_file_path, local_file_path).
+    """
+
+    # * Function Logic
+    blobs = storage.Client().bucket(bucket_name).list_blobs(prefix=bucket_folder_path)
+    download_tasks = []
+    for blob in blobs:
+        if blob.name.endswith('/'):
+            continue
+        if download_to_single_folder:
+            local_file_path = os.path.join(destination_folder_path, os.path.basename(blob.name))
+        else:
+            relative_path = re.sub(f'^{re.escape(bucket_folder_path)}/?', '', blob.name)
+            local_file_path = os.path.join(destination_folder_path, relative_path.replace('/', os.path.sep))
+        download_tasks.append((bucket_name, blob.name, local_file_path))
+    return download_tasks
+
 def _upload_file_to_bucket(source_file_path:str, bucket_name:str, bucket_file_path:str):
     """Private function to upload a single file to a GCS Bucket.
 
@@ -61,9 +93,30 @@ def _upload_file_to_bucket(source_file_path:str, bucket_name:str, bucket_file_pa
     if not file_blob.exists():
         file_blob.upload_from_filename(source_file_path)
 
+def _download_file_from_bucket(bucket_name:str, bucket_file_path:str, destination_file_path:str):
+    """Private function to download a single file from a GCS Bucket.
+
+    Args:
+        bucket_name (`str`, Mandatory): The name of the GCS Bucket where the file is stored.
+        bucket_file_path (`str`, Mandatory): The path of the file in the GCS Bucket.
+        destination_file_path (`str`, Mandatory): The local path where the file will be saved.
+    """
+
+    # * Function Logic
+    file_blob = storage.Client().bucket(bucket_name).blob(bucket_file_path)
+    if not file_blob.exists():
+        return
+    if not os.path.exists(os.path.dirname(destination_file_path)):
+        os.makedirs(os.path.dirname(destination_file_path))
+    file_blob.download_to_filename(destination_file_path)
+
 def _upload_file_task(args) -> str:
     """Wrapper function for multiprocessing."""
     _upload_file_to_bucket(*args)
+
+def _download_file_task(args) -> str:
+    """Wrapper function for multiprocessing."""
+    _download_file_from_bucket(*args)
 
 def _process_upload_tasks(
     upload_tasks:list[Tuple],
@@ -106,6 +159,45 @@ def _process_upload_tasks(
     if not use_multiprocessing:
         for file_task in tqdm(upload_tasks, desc="Uploading files"):
             _upload_file_to_bucket(*file_task)
+
+def _process_download_tasks(
+    download_tasks:list[Tuple],
+    use_multiprocessing:bool,
+    num_workers:int
+):
+    """Private function to handle downloading files from a Google Cloud Storage (GCS) Bucket.
+
+    Args:
+        download_tasks (`list[Tuple]`, Mandatory): A list of tuples, where each tuple contains the arguments required by the `_download_file_from_bucket` function.
+        use_multiprocessing (`bool`, Mandatory): Flag indicating whether to use multiprocessing for parallel downloads.
+        num_workers (`int`, Optional): The number of worker processes to use for multiprocessing. If not set and multiprocessing is enabled, the number of CPU cores will be used.
+
+    Behaviors:
+        - If the operating system is Windows, multiprocessing is disabled with a message, and the download proceeds in single-threaded mode.
+        - If an error occurs during multiprocessing, the function falls back to single-threaded downloads.
+        - If multiprocessing is not enabled or an error occurs, files are downloaded sequentially.
+    """
+
+    # * Function Logic
+    if use_multiprocessing:
+        # * Check the OS
+        if os.name == 'nt':
+            # * Disable multiprocessing for windows OS
+            print('Multiprocessing feature is not yet available for Windows OS in this version.\nFalling back to single-threaded download.')
+            use_multiprocessing = False
+        else:  # Linux or other OS
+            try:
+                num_workers = num_workers if num_workers else cpu_count()
+                with Pool(num_workers) as pool:
+                    for _ in tqdm(pool.imap_unordered(_download_file_task, download_tasks), total=len(download_tasks), desc="Downloading files"):
+                        pass
+            except RuntimeError as e:
+                print(f"Multiprocessing failed with error: {e}.\nFalling back to single-threaded download.")
+                use_multiprocessing = False
+
+    if not use_multiprocessing:
+        for download_task in tqdm(download_tasks, desc="Downloading files"):
+            _download_file_from_bucket(*download_task)
 
 def upload_file(
     source_file_paths:Union[list[str], str] = None,
@@ -183,3 +275,73 @@ def upload_folder(
     for source_folder_path in source_folder_paths:
         upload_tasks.extend(_traverse_local_folder(source_folder_path, bucket_name, bucket_folder_path, upload_to_single_folder))
     _process_upload_tasks(upload_tasks, use_multiprocessing, num_workers)
+
+def download_file(
+    bucket_name: str = None,
+    bucket_file_paths: Union[list[str], str] = None,
+    destination_folder_path: str = '.',
+    use_multiprocessing: bool = False,
+    num_workers: int = None
+):
+    """Public function to download file(s) from a GCS Bucket to a local path.
+
+    Args:
+        bucket_name (`str`, Mandatory): The name of the GCS Bucket where the file is stored.
+        bucket_file_paths (`list[str]` or `str`, Mandatory): The path(s) of the file(s) in the GCS Bucket.
+        destination_folder_path (`str`, Mandatory): The local folder path where the file(s) should be saved.
+        use_multiprocessing (`bool`, Optional): Enables the use of multiprocessing to download files in parallel. Defaults to `False`.
+        num_workers (`int`, Optional): Specifies the number of worker processes to use for multiprocessing. If not set, the default is the number of CPU cores available.
+
+    Raises:
+        ValueError: If `bucket_name`, `bucket_file_paths`, or `destination_folder_path` is not given.
+    """
+
+    # * Function arguments validation
+    if not bucket_name: raise ValueError('Bucket name is not given')
+    if not bucket_file_paths: raise ValueError('Bucket file path is not given')
+    if isinstance(bucket_file_paths, str):
+        bucket_file_paths = [bucket_file_paths]
+    if not destination_folder_path: raise ValueError('Local folder path is not given')
+
+    # * Function Logic
+    download_tasks = []
+    for bucket_file_path in bucket_file_paths:
+        local_file_path = os.path.join(destination_folder_path, os.path.basename(bucket_file_path))
+        download_tasks.append((bucket_name, bucket_file_path, local_file_path))
+    _process_download_tasks(download_tasks, use_multiprocessing, num_workers)
+
+
+def download_folder(
+    bucket_name:str = None,
+    bucket_folder_paths:Union[list[str], str] = None,
+    destination_folder_path:str = '.',
+    download_to_single_folder:bool = False,
+    use_multiprocessing:bool = False,
+    num_workers:int = None
+):
+    """Public function to download a folder and all its contents from a GCS Bucket to a local path.
+
+    Args:
+        bucket_name (`str`, Mandatory): The name of the GCS Bucket where the folder is stored.
+        bucket_folder_paths (`list[str]` or `str`, Mandatory): The path of the folder in the GCS Bucket.
+        destination_folder_path (`str`, Mandatory): The local folder path where files should be saved.
+        download_to_single_folder (`bool`, Optional): If True, all files will be downloaded to a single local folder.
+        use_multiprocessing (`bool`, Optional): Enables the use of multiprocessing to download files in parallel. Defaults to `False`.
+        num_workers (`int`, Optional): Specifies the number of worker processes to use for multiprocessing. If not set, the default is the number of CPU cores available.
+
+    Raises:
+        ValueError: If `bucket_name`, `bucket_folder_paths`, or `destination_folder_path` is not given.
+    """
+
+    # * Function arguments validation
+    if not bucket_name: raise ValueError('Bucket name is not given')
+    if not bucket_folder_paths: raise ValueError('Bucket folder path is not given')
+    if isinstance(bucket_folder_paths, str):
+        bucket_folder_paths = [bucket_folder_paths]
+    if not destination_folder_path: raise ValueError('Local folder path is not given')
+
+    # * Function logic
+    download_tasks: list[Tuple] = []
+    for bucket_folder_path in bucket_folder_paths:
+        download_tasks.extend(_traverse_bucket_folder(bucket_name, bucket_folder_path, destination_folder_path, download_to_single_folder))
+    _process_download_tasks(download_tasks, use_multiprocessing, num_workers)
