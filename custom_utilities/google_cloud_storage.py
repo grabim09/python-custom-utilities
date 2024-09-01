@@ -13,14 +13,14 @@ def get_gcs_url(gcs_bucket_name:str, gcs_file_path:str) -> str:
         gcs_bucket_name (`str`, Mandatory): The name of GCS Bucket which the file exists in.
         gcs_file_path (`str`, Mandatory): The complete path of requested file (must include extension).
     """
-    return 'gs://'+gcs_bucket_name+'/'+gcs_file_path
+    return f"gs://{gcs_bucket_name}/{gcs_file_path}"
 
 def _traverse_local_folder(
     source_folder_path:str,
     bucket_name:str,
     bucket_folder_path:str,
     upload_to_single_folder:bool
-) -> list:
+) -> list[Tuple[str, str, str]]:
     """Private recursive function to traverse inside a given folder and create upload tasks.
 
     Args:
@@ -52,7 +52,7 @@ def _traverse_bucket_folder(
     bucket_folder_path:str,
     destination_folder_path:str,
     download_to_single_folder:bool
-) -> list:
+) -> list[Tuple[str, str, str]]:
     """Private function to traverse a folder inside a given GCS folder and create download tasks.
 
     Args:
@@ -118,86 +118,38 @@ def _download_file_task(args) -> str:
     """Wrapper function for multiprocessing."""
     _download_file_from_bucket(*args)
 
-def _process_upload_tasks(
-    upload_tasks:list[Tuple],
-    use_multiprocessing:bool,
-    num_workers:int
+def _process_tasks(
+    task_type: str,
+    tasks: list[Tuple],
+    use_multiprocessing: bool,
+    num_workers: int
 ):
-    """Private function to handle the uploading of files to a Google Cloud Storage (GCS) Bucket.
-
-    Args:
-        upload_tasks (`list[Tuple]`, Mandatory): A list of tuples, where each tuple contains the arguments required by the `_upload_file_to_bucket` function.
-        use_multiprocessing (`bool`, Mandatory): Flag indicating whether to use multiprocessing for parallel uploads.
-        num_workers (`int`, Optional): The number of worker processes to use for multiprocessing. If not set and multiprocessing is enabled, the number of CPU cores will be used.
-
-    Raises:
-        RuntimeError: If multiprocessing is enabled and an error occurs during the process.
-
-    Behaviors:
-        - If the operating system is Windows, multiprocessing is disabled with a message, and the upload proceeds in single-threaded mode.
-        - If an error occurs during multiprocessing, the function falls back to single-threaded uploads.
-        - If multiprocessing is not enabled or an error occurs, files are uploaded sequentially.
-    """
-
-    # * Function Logic
+    """Private function to handle processing of tasks (uploading/downloading)."""
     if use_multiprocessing:
-        # * Check the OS
+        if task_type == 'download':
+            task_function = _download_file_task
+        elif task_type == 'upload':
+            task_function = _upload_file_task
         if os.name == 'nt':
-            # * Disable multiprocessing for windows OS
-            print('Multiprocessing feature is not yet available for Windows OS in this version.\nFalling back to single-threaded upload.')
+            print('Multiprocessing feature is not yet available for Windows OS in this version.\nFalling back to single-threaded operation.')
             use_multiprocessing = False
-        else:  # Linux or other OS
+        else:
             try:
                 num_workers = num_workers if num_workers else cpu_count()
                 with Pool(num_workers) as pool:
-                    for _ in tqdm(pool.imap_unordered(_upload_file_task, upload_tasks), total=len(upload_tasks), desc="Uploading files"):
+                    for _ in tqdm(pool.imap_unordered(task_function, tasks), total=len(tasks), desc="Processing files"):
                         pass
             except RuntimeError as e:
-                print(f"Multiprocessing failed with error: {e}.\nFalling back to single-threaded upload.")
+                print(f"Multiprocessing failed with error: {e}.\nFalling back to single-threaded operation.")
                 use_multiprocessing = False
 
     if not use_multiprocessing:
-        for file_task in tqdm(upload_tasks, desc="Uploading files"):
-            _upload_file_to_bucket(*file_task)
-
-def _process_download_tasks(
-    download_tasks:list[Tuple],
-    use_multiprocessing:bool,
-    num_workers:int
-):
-    """Private function to handle downloading files from a Google Cloud Storage (GCS) Bucket.
-
-    Args:
-        download_tasks (`list[Tuple]`, Mandatory): A list of tuples, where each tuple contains the arguments required by the `_download_file_from_bucket` function.
-        use_multiprocessing (`bool`, Mandatory): Flag indicating whether to use multiprocessing for parallel downloads.
-        num_workers (`int`, Optional): The number of worker processes to use for multiprocessing. If not set and multiprocessing is enabled, the number of CPU cores will be used.
-
-    Behaviors:
-        - If the operating system is Windows, multiprocessing is disabled with a message, and the download proceeds in single-threaded mode.
-        - If an error occurs during multiprocessing, the function falls back to single-threaded downloads.
-        - If multiprocessing is not enabled or an error occurs, files are downloaded sequentially.
-    """
-
-    # * Function Logic
-    if use_multiprocessing:
-        # * Check the OS
-        if os.name == 'nt':
-            # * Disable multiprocessing for windows OS
-            print('Multiprocessing feature is not yet available for Windows OS in this version.\nFalling back to single-threaded download.')
-            use_multiprocessing = False
-        else:  # Linux or other OS
-            try:
-                num_workers = num_workers if num_workers else cpu_count()
-                with Pool(num_workers) as pool:
-                    for _ in tqdm(pool.imap_unordered(_download_file_task, download_tasks), total=len(download_tasks), desc="Downloading files"):
-                        pass
-            except RuntimeError as e:
-                print(f"Multiprocessing failed with error: {e}.\nFalling back to single-threaded download.")
-                use_multiprocessing = False
-
-    if not use_multiprocessing:
-        for download_task in tqdm(download_tasks, desc="Downloading files"):
-            _download_file_from_bucket(*download_task)
+        if task_type == 'download':
+            task_function = _download_file_from_bucket
+        elif task_type == 'upload':
+            task_function = _upload_file_to_bucket
+        for task in tqdm(tasks, desc="Processing files"):
+            task_function(*task)
 
 def upload_file(
     source_file_paths:Union[list[str], str] = None,
@@ -231,7 +183,7 @@ def upload_file(
 
     # * Function Logic
     upload_tasks = [(source_file_path, bucket_name, f"{bucket_folder_path}/{os.path.basename(source_file_path)}") for source_file_path in source_file_paths]
-    _process_upload_tasks(upload_tasks, use_multiprocessing, num_workers)
+    _process_tasks('upload', upload_tasks, use_multiprocessing, num_workers)
 
 def upload_folder(
     source_folder_paths:Union[list[str], str] = None,
@@ -274,7 +226,7 @@ def upload_folder(
     upload_tasks:list[Tuple] = []
     for source_folder_path in source_folder_paths:
         upload_tasks.extend(_traverse_local_folder(source_folder_path, bucket_name, bucket_folder_path, upload_to_single_folder))
-    _process_upload_tasks(upload_tasks, use_multiprocessing, num_workers)
+    _process_tasks('upload', upload_tasks, use_multiprocessing, num_workers)
 
 def download_file(
     bucket_name: str = None,
@@ -308,8 +260,7 @@ def download_file(
     for bucket_file_path in bucket_file_paths:
         local_file_path = os.path.join(destination_folder_path, os.path.basename(bucket_file_path))
         download_tasks.append((bucket_name, bucket_file_path, local_file_path))
-    _process_download_tasks(download_tasks, use_multiprocessing, num_workers)
-
+    _process_tasks('download', download_tasks, use_multiprocessing, num_workers)
 
 def download_folder(
     bucket_name:str = None,
@@ -344,4 +295,4 @@ def download_folder(
     download_tasks: list[Tuple] = []
     for bucket_folder_path in bucket_folder_paths:
         download_tasks.extend(_traverse_bucket_folder(bucket_name, bucket_folder_path, destination_folder_path, download_to_single_folder))
-    _process_download_tasks(download_tasks, use_multiprocessing, num_workers)
+    _process_tasks('download', download_tasks, use_multiprocessing, num_workers)
