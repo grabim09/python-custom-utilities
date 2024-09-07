@@ -2,11 +2,12 @@ from setuptools import setup, find_packages
 
 setup(
     name='custom_utilities',
-    version='0.1.9',
+    version='0.1.10',
     description='Python package consisting of custom utilities',
     packages=find_packages(),
     install_requires=[
-        'google-cloud-storage'
+        'google-cloud-storage',
+        'tqdm'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
